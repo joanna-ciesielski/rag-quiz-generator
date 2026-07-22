@@ -72,6 +72,28 @@ Coverage includes chunking, relevant-chunk retrieval, **cross-tenant isolation**
 structured multiple-choice generation, deduplication, the empty-store case, the
 full pipeline, and clean error handling on API failure.
 
+## Evaluation (measured retrieval quality)
+
+Retrieval quality is **measured, not assumed**. A labeled eval set
+(`eval/eval_set.jsonl`) over a small corpus (`eval/corpus/`) is scored on
+**precision@k, recall@k, MRR**, and a generation **grounding rate**:
+
+```bash
+EMBEDDER=hashing python eval/run_eval.py            # print metrics
+EMBEDDER=hashing python eval/run_eval.py --k 5 --min-mrr 0.6 --min-recall 0.9 --min-precision 0.3
+```
+
+The second form is a **CI quality gate** — it exits non-zero if metrics fall
+below the thresholds, so a retrieval regression fails the build. This lets you
+prove a change (new chunking, hybrid retrieval, reranking) actually *helped*
+rather than eyeballing it.
+
+Metrics run offline in CI with the deterministic `HashingEmbedder` (a weak,
+keyword-hash embedder — real numbers with `EMBEDDER=openai` are higher); the
+harness is the same either way. Relevance is defined at the source-document
+level: a retrieved chunk is relevant if it came from a document labeled relevant
+for that query.
+
 ## Configuration
 
 | Variable         | Default                  | Purpose                                   |
@@ -85,8 +107,12 @@ full pipeline, and clean error handling on API failure.
 
 Documented, not implemented, to keep the core focused: hybrid (dense + sparse)
 retrieval and a reranking stage for higher precision; a persistent/hosted vector
-store (Chroma server, pgvector, or Qdrant) for scale; and a regression eval set
-with quality metrics wired into CI.
+store (Chroma server, pgvector, or Qdrant) for scale; per-tenant token budgets,
+caching, and multi-tier model routing for cost control; and observability
+(cost/latency/quality metrics + tracing).
+
+*(A regression eval set with retrieval metrics wired into CI is already
+implemented — see [Evaluation](#evaluation-measured-retrieval-quality).)*
 
 ---
 
