@@ -26,14 +26,22 @@ topic ────────────────────────�
   (production) or a deterministic offline `HashingEmbedder` (tests/demo, no key).
 - **Vector store** (`app/vectorstore.py`) — Chroma with cosine similarity;
   embeddings are supplied by the app, and **every query is scoped to a namespace**
-  so one tenant's content can't leak into another's results.
+  so one tenant's content can't leak into another's results. Optionally
+  **persistent on disk** (`persist_dir` / `CHROMA_PERSIST_DIR`) so an index
+  survives restarts and documents aren't re-embedded every run.
+- **Reliability** (`app/retry.py`) — API calls (embeddings + generation) retry
+  transient failures (rate limits, timeouts, 5xx) with **exponential backoff**;
+  auth/bad-request errors are not retried, since waiting won't fix them.
+- **Observability** (`app/metrics.py`) — each run reports stage timings, counts,
+  and an estimated token/cost figure, so cost and latency are visible, not guessed.
 - **Hybrid retrieval** (`app/retrieval.py`) — dense (semantic) + BM25 (lexical)
   fused with Reciprocal Rank Fusion, with optional MMR reranking for diversity.
   Measured to beat dense-only on the eval set (see below); the default retriever.
 - **Generation** (`app/quiz.py`) — retrieves top-k context, asks the LLM for
   strict JSON, and **validates it with pydantic** (no fragile text parsing);
   deduplicates questions; wraps API failures in a clean `GenerationError`.
-- **UI** (`streamlit_app.py`) — a thin layer over the pipeline.
+- **Interfaces** — a Streamlit UI (`streamlit_app.py`) and a headless
+  **CLI** (`app/cli.py`, `python -m app.cli`), both thin layers over the pipeline.
 
 ## Quickstart
 
@@ -52,13 +60,33 @@ Try it **offline** (no API key) with the deterministic embedder + mock questions
 EMBEDDER=hashing streamlit run streamlit_app.py   # then tick "Offline mode" in the sidebar
 ```
 
+## Command line
+
+Run the whole pipeline without the UI. Offline mode needs no API key:
+
+```bash
+# offline smoke test (deterministic embedder + mock questions)
+EMBEDDER=hashing python -m app.cli eval/corpus/*.md --topic "the water cycle" --offline
+
+# real run against a durable on-disk index
+export OPENAI_API_KEY=sk-...
+python -m app.cli notes.pdf --topic "chapter 3" --persist-dir .chroma --json
+```
+
+Questions print to stdout (`--json` for machine-readable); a metrics line
+(timings, counts, estimated cost) goes to stderr.
+
 ## Programmatic use
 
 ```python
-from app.pipeline import run
+from app.pipeline import run, run_with_metrics
 questions = run(["data/sample_lesson.md"], topic="the water cycle", num_questions=5)
 for q in questions:
     print(q.question, "->", q.answer, f"[{q.source}]")
+
+# run_with_metrics also returns stage timings + an estimated token/cost figure
+questions, metrics = run_with_metrics(["data/sample_lesson.md"], topic="the water cycle")
+print(metrics.summary())
 ```
 
 ## Tests
@@ -113,22 +141,27 @@ for that query.
 
 | Variable         | Default                  | Purpose                                   |
 | ---------------- | ------------------------ | ----------------------------------------- |
-| `OPENAI_API_KEY` | —                        | Required for real embeddings + generation |
-| `EMBEDDER`       | `openai`                 | `hashing` for offline/no-key mode         |
-| `EMBED_MODEL`    | `text-embedding-3-small` | OpenAI embedding model                    |
-| `QUIZ_MODEL`     | `gpt-4o-mini`            | Generation model                          |
+| `OPENAI_API_KEY`     | —                        | Required for real embeddings + generation |
+| `EMBEDDER`           | `openai`                 | `hashing` for offline/no-key mode         |
+| `EMBED_MODEL`        | `text-embedding-3-small` | OpenAI embedding model                    |
+| `QUIZ_MODEL`         | `gpt-4o-mini`            | Generation model                          |
+| `CHROMA_PERSIST_DIR` | — (in-memory)            | Directory for a durable on-disk index     |
+| `EMBED_MAX_RETRIES`  | `3`                      | Retries for transient embedding failures  |
+| `LLM_MAX_RETRIES`    | `3`                      | Retries for transient generation failures |
+| `RETRY_BASE_DELAY`   | `0.5`                    | Base seconds for exponential backoff      |
 
 ## Beyond this version (deliberate extension points)
 
 Documented, not implemented, to keep the core focused: a **neural cross-encoder
-reranker** (stronger than MMR, but needs a downloadable model); a
-persistent/hosted vector store (Chroma server, pgvector, or Qdrant) for scale;
-per-tenant token budgets, caching, and multi-tier model routing for cost
-control; and observability (cost/latency/quality metrics + tracing).
+reranker** (stronger than MMR, but needs a downloadable model); a hosted/scale-out
+vector store (Chroma server, pgvector, or Qdrant); embedding **caching** and
+per-tenant **token budgets**; and multi-tier model routing plus richer tracing.
 
 *Already implemented:* a regression eval set with retrieval metrics + CI gate
-(see [Evaluation](#evaluation-measured-retrieval-quality)), and **hybrid
-retrieval (dense + BM25 + optional MMR)** proven to beat dense-only on that eval.
+(see [Evaluation](#evaluation-measured-retrieval-quality)); **hybrid retrieval
+(dense + BM25 + optional MMR)** proven to beat dense-only on that eval;
+**persistent on-disk storage**, **retry-with-backoff** on API calls, per-run
+**metrics** (timings + estimated cost), and a headless **CLI**.
 
 ---
 

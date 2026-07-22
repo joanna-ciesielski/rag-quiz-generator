@@ -89,19 +89,30 @@ def _mock_question(context: str, qtype: QuestionType) -> QuizQuestion:
 def _call_llm(context: str, qtype: QuestionType, topic: str, model: str) -> QuizQuestion:
     import openai
 
+    from app.retry import RetryError, call_with_retries, openai_transient_exceptions
+
     client = openai.OpenAI()
+    transient = openai_transient_exceptions(openai)
+    max_retries = int(os.environ.get("LLM_MAX_RETRIES", "3"))
+    base_delay = float(os.environ.get("RETRY_BASE_DELAY", "0.5"))
     try:
-        resp = client.chat.completions.create(
-            model=model,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": _SYSTEM},
-                {"role": "user", "content": _prompt(context, qtype, topic)},
-            ],
-            temperature=0.5,
-            max_tokens=400,
+        resp = call_with_retries(
+            lambda: client.chat.completions.create(
+                model=model,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user", "content": _prompt(context, qtype, topic)},
+                ],
+                temperature=0.5,
+                max_tokens=400,
+            ),
+            retries=max_retries,
+            base_delay=base_delay,
+            exceptions=transient,
+            label="chat.completions.create",
         )
-    except openai.APIError as exc:  # auth, rate limit, bad model, network
+    except (openai.APIError, RetryError) as exc:  # non-transient, or retries exhausted
         raise GenerationError(f"LLM call failed: {exc}") from exc
     raw = resp.choices[0].message.content or ""
     try:

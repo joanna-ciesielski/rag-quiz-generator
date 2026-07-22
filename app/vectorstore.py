@@ -9,6 +9,7 @@ multi-tenant RAG.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 import chromadb
@@ -26,10 +27,28 @@ class Retrieved:
 
 
 class VectorStore:
-    def __init__(self, embedder: Embedder, collection: str = "quiz_documents") -> None:
+    def __init__(
+        self,
+        embedder: Embedder,
+        collection: str = "quiz_documents",
+        *,
+        persist_dir: str | None = None,
+    ) -> None:
+        """A Chroma-backed store.
+
+        ``persist_dir`` (or the ``CHROMA_PERSIST_DIR`` env var) makes the index
+        durable on disk — it survives process restarts, so documents don't have to
+        be re-embedded every run. Omit both for a fast, isolated in-memory store
+        (the default used by tests).
+        """
         self.embedder = embedder
         self._name = collection
-        self._client = chromadb.Client()
+        self.persist_dir = persist_dir or os.environ.get("CHROMA_PERSIST_DIR") or None
+        self._client = (
+            chromadb.PersistentClient(path=self.persist_dir)
+            if self.persist_dir
+            else chromadb.Client()
+        )
         self._col = self._client.get_or_create_collection(
             name=collection, metadata={"hnsw:space": "cosine"}
         )

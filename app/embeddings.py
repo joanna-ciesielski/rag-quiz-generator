@@ -30,6 +30,8 @@ class OpenAIEmbedder:
         # Large documents can exceed the embeddings API's per-request input/token
         # limits, so embed in batches rather than one giant call.
         self.batch_size = batch_size or int(os.environ.get("EMBED_BATCH_SIZE", "100"))
+        self.max_retries = int(os.environ.get("EMBED_MAX_RETRIES", "3"))
+        self.retry_base_delay = float(os.environ.get("RETRY_BASE_DELAY", "0.5"))
         self._client = None
 
     def _client_lazy(self):
@@ -40,11 +42,24 @@ class OpenAIEmbedder:
         return self._client
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        import openai
+
+        from app.retry import call_with_retries, openai_transient_exceptions
+
         client = self._client_lazy()
+        # Retry only transient failures (rate limits, timeouts, connection blips,
+        # 5xx). Auth/bad-request errors are not retried — waiting won't fix them.
+        transient = openai_transient_exceptions(openai)
         out: list[list[float]] = []
         for i in range(0, len(texts), self.batch_size):
             batch = texts[i : i + self.batch_size]
-            resp = client.embeddings.create(model=self.model, input=batch)
+            resp = call_with_retries(
+                lambda b=batch: client.embeddings.create(model=self.model, input=b),
+                retries=self.max_retries,
+                base_delay=self.retry_base_delay,
+                exceptions=transient,
+                label="embeddings.create",
+            )
             out.extend(d.embedding for d in resp.data)
         return out
 
