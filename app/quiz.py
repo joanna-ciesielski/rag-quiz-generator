@@ -121,6 +121,23 @@ def _call_llm(context: str, qtype: QuestionType, topic: str, model: str) -> Quiz
         raise GenerationError(f"Model returned invalid question JSON: {exc}") from exc
 
 
+def _generate_one(ctx: Retrieved, question_type: QuestionType, topic: str,
+                  model: str, mock: bool) -> QuizQuestion | None:
+    """Generate a single question for one context, or None if it failed/was invalid."""
+    try:
+        q = (
+            _mock_question(ctx.text, question_type)
+            if mock
+            else _call_llm(ctx.text, question_type, topic, model)
+        )
+    except GenerationError as exc:
+        # Skip a single bad/invalid generation rather than failing the whole quiz.
+        logger.warning("Skipping a question for source %s: %s", ctx.source, exc)
+        return None
+    q.source = ctx.source
+    return q
+
+
 def generate_quiz(
     store: VectorStore,
     topic: str,
@@ -131,11 +148,15 @@ def generate_quiz(
     mock: bool = False,
     model: str = DEFAULT_MODEL,
     retrieve_fn=None,
+    concurrency: int = 1,
 ) -> list[QuizQuestion]:
     """Retrieve context for the topic, then generate deduplicated questions.
 
     ``retrieve_fn(query, k) -> list[Retrieved]`` lets generation use any
     retriever (e.g. the hybrid one); defaults to plain dense store retrieval.
+    ``concurrency > 1`` generates questions in parallel (bounded thread pool),
+    cutting wall-clock time; results are still ordered, deduplicated, and capped
+    deterministically, and per-question failures are still skipped.
     """
     k = max(num_questions, 4)
     contexts: list[Retrieved] = (
@@ -145,25 +166,35 @@ def generate_quiz(
     if not contexts:
         return []
 
+    if concurrency > 1 and len(contexts) > 1:
+        results = _generate_concurrent(contexts, question_type, topic, model, mock, concurrency)
+    else:
+        results = (
+            _generate_one(ctx, question_type, topic, model, mock) for ctx in contexts
+        )
+
     questions: list[QuizQuestion] = []
     seen: set[str] = set()
-    for ctx in contexts:
+    for q in results:
         if len(questions) >= num_questions:
             break
-        try:
-            q = (
-                _mock_question(ctx.text, question_type)
-                if mock
-                else _call_llm(ctx.text, question_type, topic, model)
-            )
-        except GenerationError as exc:
-            # Skip a single bad/invalid generation rather than failing the whole
-            # quiz; keep going so one malformed response doesn't lose the batch.
-            logger.warning("Skipping a question for source %s: %s", ctx.source, exc)
+        if q is None:
             continue
-        q.source = ctx.source
         key = q.question.strip().lower()
         if key and key not in seen:
             seen.add(key)
             questions.append(q)
     return questions
+
+
+def _generate_concurrent(contexts: list[Retrieved], question_type: QuestionType, topic: str,
+                         model: str, mock: bool, concurrency: int) -> list[QuizQuestion | None]:
+    """Run per-context generation in a bounded pool, returning results in the
+    SAME order as ``contexts`` so dedup/capping stay deterministic."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    workers = min(concurrency, len(contexts))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(
+            lambda ctx: _generate_one(ctx, question_type, topic, model, mock), contexts
+        ))

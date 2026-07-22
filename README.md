@@ -34,6 +34,10 @@ topic ────────────────────────�
   auth/bad-request errors are not retried, since waiting won't fix them.
 - **Observability** (`app/metrics.py`) — each run reports stage timings, counts,
   and an estimated token/cost figure, so cost and latency are visible, not guessed.
+- **Cost & performance** — a content-addressed **embedding cache**
+  (`app/cache.py`, durable via SQLite) skips re-embedding unchanged chunks;
+  optional per-tenant **token budgets** (`app/budget.py`) fail fast before
+  overspending; and question generation can run **concurrently** for lower latency.
 - **Hybrid retrieval** (`app/retrieval.py`) — dense (semantic) + BM25 (lexical)
   fused with Reciprocal Rank Fusion, with optional MMR reranking for diversity.
   Measured to beat dense-only on the eval set (see below); the default retriever.
@@ -68,10 +72,16 @@ Run the whole pipeline without the UI. Offline mode needs no API key:
 # offline smoke test (deterministic embedder + mock questions)
 EMBEDDER=hashing python -m app.cli eval/corpus/*.md --topic "the water cycle" --offline
 
-# real run against a durable on-disk index
+# real run against a durable on-disk index, with an embedding cache,
+# a per-run token budget, and concurrent generation
 export OPENAI_API_KEY=sk-...
-python -m app.cli notes.pdf --topic "chapter 3" --persist-dir .chroma --json
+python -m app.cli notes.pdf --topic "chapter 3" --persist-dir .chroma \
+    --cache-path .embcache.sqlite --token-budget 200000 --concurrency 4 --json
 ```
+
+Re-running against the same `--cache-path` skips re-embedding unchanged chunks
+(the metrics line reports cache hits and tokens saved); `--token-budget` fails
+fast with a clear message before spending if the run would exceed its cap.
 
 Questions print to stdout (`--json` for machine-readable); a metrics line
 (timings, counts, estimated cost) goes to stderr.
@@ -146,6 +156,7 @@ for that query.
 | `EMBED_MODEL`        | `text-embedding-3-small` | OpenAI embedding model                    |
 | `QUIZ_MODEL`         | `gpt-4o-mini`            | Generation model                          |
 | `CHROMA_PERSIST_DIR` | — (in-memory)            | Directory for a durable on-disk index     |
+| `EMBED_CACHE_PATH`   | — (in-process)           | SQLite file for a durable embedding cache |
 | `EMBED_MAX_RETRIES`  | `3`                      | Retries for transient embedding failures  |
 | `LLM_MAX_RETRIES`    | `3`                      | Retries for transient generation failures |
 | `RETRY_BASE_DELAY`   | `0.5`                    | Base seconds for exponential backoff      |
@@ -154,14 +165,15 @@ for that query.
 
 Documented, not implemented, to keep the core focused: a **neural cross-encoder
 reranker** (stronger than MMR, but needs a downloadable model); a hosted/scale-out
-vector store (Chroma server, pgvector, or Qdrant); embedding **caching** and
-per-tenant **token budgets**; and multi-tier model routing plus richer tracing.
+vector store (Chroma server, pgvector, or Qdrant); multi-tier model routing; and
+richer distributed tracing.
 
 *Already implemented:* a regression eval set with retrieval metrics + CI gate
 (see [Evaluation](#evaluation-measured-retrieval-quality)); **hybrid retrieval
 (dense + BM25 + optional MMR)** proven to beat dense-only on that eval;
 **persistent on-disk storage**, **retry-with-backoff** on API calls, per-run
-**metrics** (timings + estimated cost), and a headless **CLI**.
+**metrics** (timings + estimated cost), a headless **CLI**, a durable
+**embedding cache**, per-tenant **token budgets**, and **concurrent generation**.
 
 ---
 

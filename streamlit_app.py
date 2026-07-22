@@ -7,6 +7,7 @@ and use the mock toggle to try it offline.
 
 from __future__ import annotations
 
+import os
 import tempfile
 from pathlib import Path
 
@@ -50,15 +51,21 @@ if st.button("Generate quiz", type="primary"):
 
     saved: list[Path] = []
     for f in files:
-        tmp = Path(tempfile.mkstemp(suffix=Path(f.name).suffix)[1])
-        tmp.write_bytes(f.read())
-        saved.append(tmp)
+        fd, path = tempfile.mkstemp(suffix=Path(f.name).suffix)
+        with os.fdopen(fd, "wb") as tmp:      # close the fd (mkstemp leaks it otherwise)
+            tmp.write(f.read())
+        saved.append(Path(path))
 
     embedder = HashingEmbedder() if offline else get_embedder()
     with st.spinner("Indexing documents…"):
         # clear_namespace clears only THIS namespace's prior docs (tenant-safe), so a
         # rerun uses this run's uploads without wiping other namespaces.
-        chunks = ingest_all(saved, namespace=namespace)
+        try:
+            chunks = ingest_all(saved, namespace=namespace)
+        finally:
+            # chunks hold the content now; don't leave upload temp files on disk.
+            for p in saved:
+                p.unlink(missing_ok=True)
         store = VectorStore(embedder)
         store.clear_namespace(namespace)
         store.add(chunks)

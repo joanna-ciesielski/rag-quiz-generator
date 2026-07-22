@@ -16,6 +16,7 @@ import argparse
 import json
 import sys
 
+from app.budget import BudgetExceeded
 from app.embeddings import HashingEmbedder, get_embedder
 from app.pipeline import run_with_metrics
 
@@ -32,6 +33,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--offline", action="store_true",
                    help="No API key: deterministic hashing embedder + mock questions")
     p.add_argument("--persist-dir", default=None, help="Directory for a durable on-disk index")
+    p.add_argument("--cache-path", default=None,
+                   help="SQLite file for a durable embedding cache (skips re-embedding unchanged chunks)")
+    p.add_argument("--token-budget", type=int, default=None,
+                   help="Max estimated embedding tokens for this run (fails fast if exceeded)")
+    p.add_argument("--concurrency", type=int, default=1,
+                   help="Generate questions in parallel with this many workers")
     p.add_argument("--json", action="store_true", help="Emit questions as JSON")
     p.add_argument("--chunk-size", type=int, default=1000)
     p.add_argument("--chunk-overlap", type=int, default=150)
@@ -42,13 +49,18 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     embedder = HashingEmbedder() if args.offline else get_embedder()
 
-    questions, metrics = run_with_metrics(
-        args.files, args.topic,
-        namespace=args.namespace, num_questions=args.num_questions,
-        question_type=args.qtype, embedder=embedder, retrieval=args.retrieval,
-        use_mmr=args.mmr, mock=args.offline, persist_dir=args.persist_dir,
-        chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap,
-    )
+    try:
+        questions, metrics = run_with_metrics(
+            args.files, args.topic,
+            namespace=args.namespace, num_questions=args.num_questions,
+            question_type=args.qtype, embedder=embedder, retrieval=args.retrieval,
+            use_mmr=args.mmr, mock=args.offline, persist_dir=args.persist_dir,
+            cache_path=args.cache_path, token_budget=args.token_budget,
+            concurrency=args.concurrency, chunk_size=args.chunk_size, chunk_overlap=args.chunk_overlap,
+        )
+    except BudgetExceeded as exc:
+        print(f"[budget] {exc}", file=sys.stderr)
+        return 2
 
     if args.json:
         print(json.dumps([q.model_dump() for q in questions], indent=2))
