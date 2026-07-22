@@ -35,12 +35,11 @@ class VectorStore:
         )
 
     def reset(self) -> None:
-        """Drop and recreate the collection.
+        """Drop and recreate the ENTIRE collection (all namespaces).
 
-        chromadb's default client shares state within a process, so a collection
-        with a given name persists across VectorStore instances. Call this to
-        start clean (e.g. per demo session) when you don't want prior documents
-        to remain searchable.
+        Use only when you truly want a clean slate. To clear a single tenant
+        without touching others, use ``clear_namespace`` — that preserves the
+        multi-tenant isolation guarantee.
         """
         try:
             self._client.delete_collection(self._name)
@@ -49,6 +48,17 @@ class VectorStore:
         self._col = self._client.get_or_create_collection(
             name=self._name, metadata={"hnsw:space": "cosine"}
         )
+
+    def clear_namespace(self, namespace: str) -> int:
+        """Delete only one namespace's documents, leaving other tenants intact.
+
+        This is the tenant-safe way to 'start fresh' — critical because the store
+        is shared across namespaces, so a full reset would wipe every tenant.
+        """
+        ids = self._col.get(where={"namespace": namespace}).get("ids", [])
+        if ids:
+            self._col.delete(ids=ids)
+        return len(ids)
 
     def add(self, chunks: list[Chunk]) -> int:
         if not chunks:

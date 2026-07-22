@@ -22,13 +22,13 @@ def build_store(
 ) -> VectorStore:
     """Ingest and index one or more documents into a namespace-scoped store.
 
-    ``fresh=True`` clears the collection first (useful for a demo session so a
-    prior upload's content doesn't remain searchable); leave False to persist
-    and accumulate across calls, which is the multi-tenant production default.
+    ``fresh=True`` clears only THIS namespace's prior documents first (tenant-safe,
+    so other namespaces are untouched); leave False to persist and accumulate
+    across calls, which is the multi-tenant production default.
     """
     store = VectorStore(embedder or get_embedder(), collection=collection)
     if fresh:
-        store.reset()
+        store.clear_namespace(namespace)
     for f in files:
         chunks = ingest_file(
             f, namespace=namespace, chunk_size=chunk_size, chunk_overlap=chunk_overlap

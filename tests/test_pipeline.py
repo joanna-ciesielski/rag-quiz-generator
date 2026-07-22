@@ -86,6 +86,18 @@ def test_reset_clears_prior_documents():
     assert hits == []
 
 
+def test_clear_namespace_is_tenant_safe():
+    """Clearing one tenant's docs must NOT remove another tenant's docs."""
+    store = VectorStore(HashingEmbedder(), collection="test_clear_ns")
+    store.add(chunk_text("Alpha content for tenant A.", source="a.txt", namespace="A", chunk_size=100, chunk_overlap=10))
+    store.add(chunk_text("Beta content for tenant B.", source="b.txt", namespace="B", chunk_size=100, chunk_overlap=10))
+    removed = store.clear_namespace("A")
+    assert removed >= 1
+    assert store.count("A") == 0          # A gone
+    assert store.count("B") >= 1          # B preserved
+    assert store.query("content", namespace="B", k=3)  # B still retrievable
+
+
 def test_multiple_choice_answer_must_be_a_choice():
     """A MC question whose answer isn't among its choices is rejected."""
     with pytest.raises(ValidationError):

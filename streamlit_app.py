@@ -45,8 +45,8 @@ if st.button("Generate quiz", type="primary"):
 
     embedder = HashingEmbedder() if offline else get_embedder()
     with st.spinner("Indexing documents…"):
-        # fresh=True so each generation starts from a clean index (this run's
-        # uploads only), rather than accumulating documents across reruns.
+        # fresh=True clears only THIS namespace's prior docs (tenant-safe), so a
+        # rerun uses this run's uploads without wiping other namespaces.
         store = build_store(saved, namespace=namespace, embedder=embedder, fresh=True)
     st.success(f"Indexed {store.count(namespace)} chunks in namespace '{namespace}'.")
 
