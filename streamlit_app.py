@@ -13,8 +13,10 @@ from pathlib import Path
 import streamlit as st
 
 from app.embeddings import HashingEmbedder, get_embedder
-from app.pipeline import build_store
+from app.pipeline import ingest_all
 from app.quiz import generate_quiz
+from app.retrieval import HybridRetriever
+from app.vectorstore import VectorStore
 
 st.set_page_config(page_title="RAG Quiz Generator", page_icon="📝")
 st.title("📝 RAG Quiz Generator")
@@ -28,6 +30,15 @@ with st.sidebar:
                               help="Retrieval is scoped to this namespace — content never leaks across namespaces.")
     num_q = st.slider("Number of questions", 1, 20, 5)
     qtype = st.radio("Question type", ["multiple_choice", "open_ended"])
+    st.divider()
+    hybrid_on = st.toggle(
+        "Hybrid retrieval (dense + keyword)", value=True,
+        help="Fuses semantic (dense) and BM25 (lexical) search — the eval-measured better retriever.",
+    )
+    mmr_on = st.toggle(
+        "MMR reranking (diversity)", value=False, disabled=not hybrid_on,
+        help="Trades some relevance for diversity. Off by default; lowered scores on the eval set.",
+    )
 
 files = st.file_uploader("Upload PDF / Markdown / text", type=["pdf", "md", "txt"], accept_multiple_files=True)
 topic = st.text_input("Quiz topic", placeholder="e.g. cell biology, chapter 3")
@@ -45,15 +56,24 @@ if st.button("Generate quiz", type="primary"):
 
     embedder = HashingEmbedder() if offline else get_embedder()
     with st.spinner("Indexing documents…"):
-        # fresh=True clears only THIS namespace's prior docs (tenant-safe), so a
+        # clear_namespace clears only THIS namespace's prior docs (tenant-safe), so a
         # rerun uses this run's uploads without wiping other namespaces.
-        store = build_store(saved, namespace=namespace, embedder=embedder, fresh=True)
+        chunks = ingest_all(saved, namespace=namespace)
+        store = VectorStore(embedder)
+        store.clear_namespace(namespace)
+        store.add(chunks)
     st.success(f"Indexed {store.count(namespace)} chunks in namespace '{namespace}'.")
+
+    retrieve_fn = None
+    if hybrid_on:
+        hybrid = HybridRetriever(store, chunks, namespace=namespace)
+        retrieve_fn = lambda q, k: hybrid.query(q, k=k, use_mmr=mmr_on)  # noqa: E731
 
     with st.spinner("Generating questions…"):
         questions = generate_quiz(
             store, topic, namespace=namespace,
             num_questions=num_q, question_type=qtype, mock=offline,
+            retrieve_fn=retrieve_fn,
         )
 
     if not questions:

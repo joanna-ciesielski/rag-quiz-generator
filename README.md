@@ -27,6 +27,9 @@ topic ────────────────────────�
 - **Vector store** (`app/vectorstore.py`) — Chroma with cosine similarity;
   embeddings are supplied by the app, and **every query is scoped to a namespace**
   so one tenant's content can't leak into another's results.
+- **Hybrid retrieval** (`app/retrieval.py`) — dense (semantic) + BM25 (lexical)
+  fused with Reciprocal Rank Fusion, with optional MMR reranking for diversity.
+  Measured to beat dense-only on the eval set (see below); the default retriever.
 - **Generation** (`app/quiz.py`) — retrieves top-k context, asks the LLM for
   strict JSON, and **validates it with pydantic** (no fragile text parsing);
   deduplicates questions; wraps API failures in a clean `GenerationError`.
@@ -83,10 +86,22 @@ EMBEDDER=hashing python eval/run_eval.py            # print metrics
 EMBEDDER=hashing python eval/run_eval.py --k 5 --min-mrr 0.6 --min-recall 0.9 --min-precision 0.3
 ```
 
-The second form is a **CI quality gate** — it exits non-zero if metrics fall
-below the thresholds, so a retrieval regression fails the build. This lets you
-prove a change (new chunking, hybrid retrieval, reranking) actually *helped*
-rather than eyeballing it.
+The runner **compares retrievers** (dense vs hybrid vs hybrid+MMR) on the same
+eval set, and `--gate-on hybrid` makes it a **CI quality gate** — it exits
+non-zero if metrics fall below thresholds, so a retrieval regression fails the
+build. This let us *prove* the Phase-2 hybrid retriever helped rather than
+assume it (offline hashing-embedder numbers):
+
+| retriever        | precision@5 | recall@5 | MRR |
+| ---------------- | ----------- | -------- | --- |
+| dense (baseline) | 0.40        | 1.0      | 0.80 |
+| **hybrid (dense+BM25)** | **0.44** | **1.0** | **1.00** |
+| hybrid + MMR     | 0.40        | 1.0      | 0.80 |
+
+Hybrid is a clear win. MMR *lowered* the score here — it trades relevance for
+diversity, which hurts when relevance is concentrated — so it's **off by
+default**, enabled only when redundant near-duplicate chunks are a problem. That
+tradeoff is exactly the kind of thing the eval harness is for.
 
 Metrics run offline in CI with the deterministic `HashingEmbedder` (a weak,
 keyword-hash embedder — real numbers with `EMBEDDER=openai` are higher); the
@@ -105,14 +120,15 @@ for that query.
 
 ## Beyond this version (deliberate extension points)
 
-Documented, not implemented, to keep the core focused: hybrid (dense + sparse)
-retrieval and a reranking stage for higher precision; a persistent/hosted vector
-store (Chroma server, pgvector, or Qdrant) for scale; per-tenant token budgets,
-caching, and multi-tier model routing for cost control; and observability
-(cost/latency/quality metrics + tracing).
+Documented, not implemented, to keep the core focused: a **neural cross-encoder
+reranker** (stronger than MMR, but needs a downloadable model); a
+persistent/hosted vector store (Chroma server, pgvector, or Qdrant) for scale;
+per-tenant token budgets, caching, and multi-tier model routing for cost
+control; and observability (cost/latency/quality metrics + tracing).
 
-*(A regression eval set with retrieval metrics wired into CI is already
-implemented — see [Evaluation](#evaluation-measured-retrieval-quality).)*
+*Already implemented:* a regression eval set with retrieval metrics + CI gate
+(see [Evaluation](#evaluation-measured-retrieval-quality)), and **hybrid
+retrieval (dense + BM25 + optional MMR)** proven to beat dense-only on that eval.
 
 ---
 

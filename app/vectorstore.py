@@ -98,6 +98,17 @@ class VectorStore:
             )
         return out
 
+    def get_embeddings(self, ids: list[str]) -> dict[str, list[float]]:
+        """Fetch stored embeddings by id (used by MMR reranking — avoids re-embedding)."""
+        if not ids:
+            return {}
+        res = self._col.get(ids=ids, include=["embeddings"])
+        got_ids = res.get("ids") or []
+        got_embs = res.get("embeddings")
+        if got_embs is None:
+            return {}
+        return {i: list(e) for i, e in zip(got_ids, got_embs)}
+
     def count(self, namespace: str | None = None) -> int:
         if namespace is None:
             return self._col.count()

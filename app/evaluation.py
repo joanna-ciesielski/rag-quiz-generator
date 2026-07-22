@@ -12,12 +12,13 @@ relevant if it came from a document labeled relevant for that query.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from statistics import mean
 
 from app.quiz import generate_quiz
-from app.vectorstore import VectorStore
+from app.vectorstore import Retrieved, VectorStore
 
 
 # ---- core metric functions (pure, unit-testable) ----------------------------
@@ -74,6 +75,33 @@ def load_eval_set(path: str | Path) -> list[EvalCase]:
             obj = json.loads(line)
             cases.append(EvalCase(query=obj["query"], relevant_sources=list(obj["relevant_sources"])))
     return cases
+
+
+def evaluate_retrieval(
+    retrieve_fn: Callable[[str, int], list[Retrieved]],
+    cases: list[EvalCase],
+    *,
+    k: int = 5,
+) -> dict[str, float]:
+    """Retrieval-only metrics for any retriever exposed as ``fn(query, k)``.
+
+    Lets us score and compare different retrievers (dense vs hybrid vs
+    hybrid+MMR) on the same eval set with identical metrics.
+    """
+    precisions, recalls, rrs = [], [], []
+    for case in cases:
+        relevant = set(case.relevant_sources)
+        sources = [h.source for h in retrieve_fn(case.query, k)]
+        precisions.append(precision_at_k(sources, relevant, k))
+        recalls.append(recall_at_k(sources, relevant, k))
+        rrs.append(reciprocal_rank(sources, relevant))
+    return {
+        "precision_at_k": round(mean(precisions), 4) if precisions else 0.0,
+        "recall_at_k": round(mean(recalls), 4) if recalls else 0.0,
+        "mrr": round(mean(rrs), 4) if rrs else 0.0,
+        "k": k,
+        "n_queries": len(cases),
+    }
 
 
 def evaluate(

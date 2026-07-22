@@ -119,9 +119,18 @@ def generate_quiz(
     question_type: QuestionType = "multiple_choice",
     mock: bool = False,
     model: str = DEFAULT_MODEL,
+    retrieve_fn=None,
 ) -> list[QuizQuestion]:
-    """Retrieve context for the topic, then generate deduplicated questions."""
-    contexts: list[Retrieved] = store.query(topic, namespace=namespace, k=max(num_questions, 4))
+    """Retrieve context for the topic, then generate deduplicated questions.
+
+    ``retrieve_fn(query, k) -> list[Retrieved]`` lets generation use any
+    retriever (e.g. the hybrid one); defaults to plain dense store retrieval.
+    """
+    k = max(num_questions, 4)
+    contexts: list[Retrieved] = (
+        retrieve_fn(topic, k) if retrieve_fn is not None
+        else store.query(topic, namespace=namespace, k=k)
+    )
     if not contexts:
         return []
 
