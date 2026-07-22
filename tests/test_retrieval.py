@@ -68,6 +68,18 @@ def test_hybrid_retriever_returns_relevant_source():
     assert hits and hits[0].source == "photosynthesis.md"
 
 
+def test_hybrid_query_with_mmr_returns_results():
+    """Exercise the use_mmr=True path THROUGH the retriever (not mmr_rerank
+    directly) — this hits store.get_embeddings + mmr reranking end to end."""
+    store, chunks = _build()
+    hybrid = HybridRetriever(store, chunks, namespace="default")
+    hits = hybrid.query("sunlight chlorophyll glucose", k=2, use_mmr=True)
+    assert hits and len(hits) <= 2
+    assert all(h.chunk_id for h in hits)
+    # the top hit should still be the relevant source even after diversification
+    assert hits[0].source == "photosynthesis.md"
+
+
 def test_hybrid_at_least_matches_dense_mrr_on_fixture():
     """The measurable point of Phase 2: hybrid should not regress dense, and
     here it improves it."""
