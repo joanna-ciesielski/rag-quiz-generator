@@ -7,10 +7,13 @@ carries source metadata for citation and per-namespace scoping.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -75,6 +78,10 @@ def ingest_file(
 ) -> list[Chunk]:
     path = Path(path)
     text = read_document(path)
+    if not text.strip():
+        # e.g. a scanned/image-only PDF with no text layer — surface it instead
+        # of silently indexing nothing (that content would need OCR first).
+        logger.warning("No text extracted from %s — it may be scanned/empty and need OCR.", path.name)
     return chunk_text(
         text,
         source=path.name,

@@ -9,12 +9,15 @@ whole pipeline runs offline and in tests.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from typing import Literal
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.vectorstore import Retrieved, VectorStore
+
+logger = logging.getLogger(__name__)
 
 QuestionType = Literal["multiple_choice", "open_ended"]
 
@@ -25,6 +28,19 @@ class QuizQuestion(BaseModel):
     choices: list[str] = Field(default_factory=list)
     answer: str | None = None
     source: str | None = None
+
+    @model_validator(mode="after")
+    def _validate_multiple_choice(self) -> "QuizQuestion":
+        """A multiple-choice question must have distinct choices AND its answer
+        must be one of them — otherwise the question is unusable."""
+        if self.type == "multiple_choice":
+            if len(self.choices) < 2:
+                raise ValueError("multiple_choice requires at least 2 choices")
+            if len(set(self.choices)) != len(self.choices):
+                raise ValueError("multiple_choice choices must be unique")
+            if self.answer is None or self.answer not in self.choices:
+                raise ValueError("multiple_choice answer must be one of the choices")
+        return self
 
 
 class GenerationError(RuntimeError):
@@ -114,11 +130,17 @@ def generate_quiz(
     for ctx in contexts:
         if len(questions) >= num_questions:
             break
-        q = (
-            _mock_question(ctx.text, question_type)
-            if mock
-            else _call_llm(ctx.text, question_type, topic, model)
-        )
+        try:
+            q = (
+                _mock_question(ctx.text, question_type)
+                if mock
+                else _call_llm(ctx.text, question_type, topic, model)
+            )
+        except GenerationError as exc:
+            # Skip a single bad/invalid generation rather than failing the whole
+            # quiz; keep going so one malformed response doesn't lose the batch.
+            logger.warning("Skipping a question for source %s: %s", ctx.source, exc)
+            continue
         q.source = ctx.source
         key = q.question.strip().lower()
         if key and key not in seen:

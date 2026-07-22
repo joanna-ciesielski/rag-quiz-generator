@@ -7,6 +7,7 @@ retrieve->generate path is exercised with no API key and no network.
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from app.embeddings import HashingEmbedder
 from app.ingest import chunk_text
@@ -85,10 +86,76 @@ def test_reset_clears_prior_documents():
     assert hits == []
 
 
-def test_llm_error_wrapped_as_generation_error(monkeypatch):
-    """Non-mock path: an SDK error becomes a clean GenerationError."""
+def test_multiple_choice_answer_must_be_a_choice():
+    """A MC question whose answer isn't among its choices is rejected."""
+    with pytest.raises(ValidationError):
+        QuizQuestion(
+            question="Q?",
+            type="multiple_choice",
+            choices=["A", "B", "C", "D"],
+            answer="Z",  # not in choices
+        )
+    with pytest.raises(ValidationError):
+        QuizQuestion(question="Q?", type="multiple_choice", choices=["A", "A"], answer="A")  # dup
+
+
+def test_valid_multiple_choice_passes():
+    q = QuizQuestion(question="Q?", type="multiple_choice", choices=["A", "B", "C", "D"], answer="B")
+    assert q.answer == "B"
+
+
+def test_generate_quiz_skips_bad_question_and_continues(monkeypatch):
+    """One malformed LLM response is skipped; the rest of the quiz still builds."""
     import sys
     import types
+
+    calls = {"n": 0}
+
+    class _Msg:
+        def __init__(self, content):
+            self.message = type("M", (), {"content": content})
+
+    class _Resp:
+        def __init__(self, content):
+            self.choices = [_Msg(content)]
+
+    class _Msgs:
+        def create(self, **kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return _Resp("not json at all")  # first is bad -> skipped
+            return _Resp('{"question": "Good Q %d?", "type": "open_ended", "answer": "ok"}' % calls["n"])
+
+    class _Chat:
+        completions = _Msgs()
+
+    class _Client:
+        chat = _Chat()
+
+    stub = types.ModuleType("openai")
+    stub.OpenAI = lambda: _Client()
+    stub.APIError = type("APIError", (Exception,), {})
+    monkeypatch.setitem(sys.modules, "openai", stub)
+
+    long_doc = (
+        "Alpha section covers introduction basics and setup. " * 2
+        + "Beta section covers intermediate topics in depth. " * 2
+        + "Gamma section covers advanced material and theory. " * 2
+        + "Delta section covers the summary and conclusion. " * 2
+    )
+    store = _store_with({"doc.txt": long_doc}, namespace="default")
+    qs = generate_quiz(store, "sections", num_questions=2, question_type="open_ended", mock=False)
+    assert len(qs) >= 1  # did not crash on the bad first response
+    assert calls["n"] >= 2  # kept going past the failure
+
+
+def test_llm_api_error_wrapped_and_handled_gracefully(monkeypatch):
+    """An SDK error is wrapped as GenerationError (unit), and generate_quiz
+    degrades to an empty quiz rather than crashing (integration)."""
+    import sys
+    import types
+
+    from app.quiz import _call_llm
 
     class _APIError(Exception):
         pass
@@ -108,6 +175,10 @@ def test_llm_error_wrapped_as_generation_error(monkeypatch):
     stub.APIError = _APIError
     monkeypatch.setitem(sys.modules, "openai", stub)
 
-    store = _store_with({"x.txt": "Some content about topic X for retrieval."})
+    # unit: the wrapper converts the SDK error into our domain error
     with pytest.raises(GenerationError):
-        generate_quiz(store, "topic X", num_questions=1, mock=False)
+        _call_llm("some context", "open_ended", "topic X", "gpt-4o-mini")
+
+    # integration: every question fails, so the quiz comes back empty (no crash)
+    store = _store_with({"x.txt": "Some content about topic X for retrieval."})
+    assert generate_quiz(store, "topic X", num_questions=1, mock=False) == []
