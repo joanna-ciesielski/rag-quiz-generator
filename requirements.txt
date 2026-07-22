@@ -1,0 +1,6 @@
+chromadb>=0.5,<2
+langchain-text-splitters>=0.2,<0.4
+pypdf>=4.0,<6
+pydantic>=2.7,<3
+openai>=1.40,<2
+streamlit>=1.36,<2
