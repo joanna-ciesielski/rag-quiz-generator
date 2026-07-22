@@ -24,9 +24,12 @@ class Embedder(Protocol):
 class OpenAIEmbedder:
     """Production embeddings via the OpenAI embeddings API."""
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, batch_size: int | None = None) -> None:
         self.model = model or os.environ.get("EMBED_MODEL", "text-embedding-3-small")
         self.dim = int(os.environ.get("EMBED_DIM", "1536"))
+        # Large documents can exceed the embeddings API's per-request input/token
+        # limits, so embed in batches rather than one giant call.
+        self.batch_size = batch_size or int(os.environ.get("EMBED_BATCH_SIZE", "100"))
         self._client = None
 
     def _client_lazy(self):
@@ -37,8 +40,13 @@ class OpenAIEmbedder:
         return self._client
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        resp = self._client_lazy().embeddings.create(model=self.model, input=texts)
-        return [d.embedding for d in resp.data]
+        client = self._client_lazy()
+        out: list[list[float]] = []
+        for i in range(0, len(texts), self.batch_size):
+            batch = texts[i : i + self.batch_size]
+            resp = client.embeddings.create(model=self.model, input=batch)
+            out.extend(d.embedding for d in resp.data)
+        return out
 
 
 class HashingEmbedder:

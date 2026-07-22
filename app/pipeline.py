@@ -15,11 +15,20 @@ def build_store(
     *,
     namespace: str = "default",
     embedder: Embedder | None = None,
+    collection: str = "quiz_documents",
+    fresh: bool = False,
     chunk_size: int = 1000,
     chunk_overlap: int = 150,
 ) -> VectorStore:
-    """Ingest and index one or more documents into a namespace-scoped store."""
-    store = VectorStore(embedder or get_embedder())
+    """Ingest and index one or more documents into a namespace-scoped store.
+
+    ``fresh=True`` clears the collection first (useful for a demo session so a
+    prior upload's content doesn't remain searchable); leave False to persist
+    and accumulate across calls, which is the multi-tenant production default.
+    """
+    store = VectorStore(embedder or get_embedder(), collection=collection)
+    if fresh:
+        store.reset()
     for f in files:
         chunks = ingest_file(
             f, namespace=namespace, chunk_size=chunk_size, chunk_overlap=chunk_overlap

@@ -28,9 +28,26 @@ class Retrieved:
 class VectorStore:
     def __init__(self, embedder: Embedder, collection: str = "quiz_documents") -> None:
         self.embedder = embedder
+        self._name = collection
         self._client = chromadb.Client()
         self._col = self._client.get_or_create_collection(
             name=collection, metadata={"hnsw:space": "cosine"}
+        )
+
+    def reset(self) -> None:
+        """Drop and recreate the collection.
+
+        chromadb's default client shares state within a process, so a collection
+        with a given name persists across VectorStore instances. Call this to
+        start clean (e.g. per demo session) when you don't want prior documents
+        to remain searchable.
+        """
+        try:
+            self._client.delete_collection(self._name)
+        except Exception:  # collection may not exist yet
+            pass
+        self._col = self._client.get_or_create_collection(
+            name=self._name, metadata={"hnsw:space": "cosine"}
         )
 
     def add(self, chunks: list[Chunk]) -> int:
@@ -63,7 +80,9 @@ class VectorStore:
                 Retrieved(
                     text=doc,
                     source=(meta or {}).get("source", "unknown"),
-                    score=1.0 - float(dist),  # cosine distance -> similarity
+                    # cosine distance (0..2) -> similarity, floored at 0 so a
+                    # dissimilar hit never reports a negative score
+                    score=max(0.0, 1.0 - float(dist)),
                     chunk_id=cid,
                 )
             )

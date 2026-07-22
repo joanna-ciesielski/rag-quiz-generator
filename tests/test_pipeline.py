@@ -74,6 +74,17 @@ def test_full_pipeline_run_offline(tmp_path):
     assert qs and all(q.question for q in qs)
 
 
+def test_reset_clears_prior_documents():
+    store = VectorStore(HashingEmbedder(), collection="test_reset")
+    store.add(chunk_text("Old content about dinosaurs.", source="old.txt", chunk_size=100, chunk_overlap=10))
+    assert store.count() > 0
+    store.reset()
+    assert store.count() == 0
+    # after reset, prior content is no longer retrievable
+    hits = store.query("dinosaurs", k=3)
+    assert hits == []
+
+
 def test_llm_error_wrapped_as_generation_error(monkeypatch):
     """Non-mock path: an SDK error becomes a clean GenerationError."""
     import sys

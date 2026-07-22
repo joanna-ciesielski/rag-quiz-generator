@@ -45,7 +45,9 @@ if st.button("Generate quiz", type="primary"):
 
     embedder = HashingEmbedder() if offline else get_embedder()
     with st.spinner("Indexing documents…"):
-        store = build_store(saved, namespace=namespace, embedder=embedder)
+        # fresh=True so each generation starts from a clean index (this run's
+        # uploads only), rather than accumulating documents across reruns.
+        store = build_store(saved, namespace=namespace, embedder=embedder, fresh=True)
     st.success(f"Indexed {store.count(namespace)} chunks in namespace '{namespace}'.")
 
     with st.spinner("Generating questions…"):
