@@ -8,3 +8,5 @@ venv/
 chroma/
 *.sqlite3
 .DS_Store
+.coverage
+*.sqlite
